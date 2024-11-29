@@ -1,16 +1,14 @@
 import ctypes
 import typing
 
+from . import typed_sdl3
+from .typed_sdl3 import *
 if typing.TYPE_CHECKING:
-    import typed_sdl3
-    from typed_sdl3 import *
     sdl3: typed_sdl3.SDL3DLL
     T = typing.TypeVar('T', bound=ctypes._CData)
     def byref(t:T) -> ctypes._Pointer[T]:
         return typing.cast(ctypes._Pointer[T], ctypes.byref(t))
 else:
-    from . import typed_sdl3
-    from .typed_sdl3 import *
     byref = ctypes.byref
 NULL = ctypes.POINTER(ctypes.c_int)()
 
@@ -88,7 +86,15 @@ class AudioSpec:
     _sample_rate:int
 
     def __init__(self, format, n_channels=2, sample_rate=48000):
-        assert format in _str2fmt
+        if not isinstance(format, str):
+            raise TypeError(f"'format' should be a str, not a '{format.__class__.__name__}'")
+        if not isinstance(n_channels, int): 
+            raise TypeError(f"'n_channels' should be an int, not a '{format.__class__.__name__}'")
+        if not isinstance(sample_rate, int): 
+            raise TypeError(f"'sample_rate' should be an int, not a '{format.__class__.__name__}'")
+        if format not in _str2fmt:
+            raise ValueError(f"'{format}' is not a valid format, expected {list(_str2fmt.keys())}")
+
         self._format = format
         self._n_channels = n_channels
         self._sample_rate = sample_rate
@@ -102,7 +108,7 @@ class AudioSpec:
     
     @property
     def n_channels(self):
-        return self.n_channels
+        return self._n_channels
     
     @property
     def sample_rate(self):
@@ -125,7 +131,8 @@ class AudioSpec:
         return cls(format_str, struct.channels, struct.freq)
     
     def __eq__(self, value: object) -> bool:
-        assert isinstance(value,AudioSpec)
+        if not isinstance(value,AudioSpec):
+            return False
         return (
             value._format==self._format and 
             value._n_channels==self._n_channels and
@@ -142,7 +149,7 @@ def _list_devices(is_playback:bool):
         raise SDLError()
     out = []
     for dev_index in range(cnt.value):
-        dev = PhysicalAudioDevice.__new__(PhysicalAudioDevice, dev_id_p[dev_index])
+        dev = _new_audio_device(PhysicalAudioDevice, dev_id_p[dev_index])
         out.append(dev)
     sdl3.SDL_free(dev_id_p)
     return out
@@ -156,29 +163,38 @@ def list_recording_devices() -> list["PhysicalAudioDevice"]:
 def open_default_playback_device(spec_hint:AudioSpec|None=None) -> "LogicalAudioDevice":
     if spec_hint is None:
         spec_p = ctypes.POINTER(SDL_AudioSpec)() # NULL
-    else:
+    elif isinstance(spec_hint, AudioSpec):
         spec_p = byref(spec_hint._as_sdl_struct())
+    else:
+        raise TypeError(f"'spec_hint' should be a AudioSpec or None, not '{spec_hint.__class__.__name__}'")
     dev_id = sdl3.SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, spec_p)
     if dev_id==0:
         raise SDLError()
-    return LogicalAudioDevice.__new__(LogicalAudioDevice, dev_id)
+    return _new_audio_device(LogicalAudioDevice, dev_id)
 
 def open_default_recording_device(spec_hint:AudioSpec|None=None) -> "LogicalAudioDevice":
     if spec_hint is None:
         spec_p = ctypes.POINTER(SDL_AudioSpec)() # NULL
-    else:
+    elif isinstance(spec_hint, AudioSpec):
         spec_p = byref(spec_hint._as_sdl_struct())
+    else:
+        raise TypeError(f"'spec_hint' should be a AudioSpec or None, not '{spec_hint.__class__.__name__}'")
     dev_id = sdl3.SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_RECORDING, spec_p)
     if dev_id==0:
         raise SDLError()
-    return LogicalAudioDevice.__new__(LogicalAudioDevice, dev_id)
+    return _new_audio_device(LogicalAudioDevice, dev_id)
+
+def _new_audio_device(cls, device_id):
+    instance = object.__new__(cls)
+    instance._device_id = SDL_AudioDeviceID(device_id)
+    return instance
 
 class _AudioDevice:
     _device_id: SDL_AudioDeviceID
-    def __new__(cls, device_id):
-        instance = super().__new__(cls)
-        instance._device_id = SDL_AudioDeviceID(device_id)
-        return instance
+
+    def __init__(self):
+        raise TypeError("You should never call AudioDevice() directly")
+    
     @property
     def name(self) -> str:
         name = sdl3.SDL_GetAudioDeviceName(self._device_id)
@@ -196,7 +212,7 @@ class _AudioDevice:
     
     @property
     def id(self):
-        return self._device_id
+        return self._device_id.value
     
     def _open(self, spec_hint:AudioSpec|None=None) -> "LogicalAudioDevice":
         if spec_hint is None:
@@ -208,7 +224,7 @@ class _AudioDevice:
         if dev_id==0:
             raise SDLError()
         cls = LogicalAudioDevice
-        dev = cls.__new__(cls, dev_id)
+        dev = _new_audio_device(cls, dev_id)
         return dev
     
     def _get_spec(self) -> AudioSpec:
@@ -219,20 +235,19 @@ class _AudioDevice:
         return AudioSpec._from_sdl_struct(spec_struct)
 
 class PhysicalAudioDevice(_AudioDevice):
-    def __init__(self,*_):
-        raise TypeError("You should never call AudioDevice() directly")
-    
     def __repr__(self):
         return f"<PhysicalAudioDevice('{self.name}', id={self._device_id.value})>"
     
     def open(self, spec_hint=None) -> "LogicalAudioDevice":
+        if not isinstance(spec_hint, (type(None), AudioSpec)):
+            raise TypeError(f"'spec_hint' should be a AudioSpec or None, not '{spec_hint.__class__.__name__}'")
         return self._open(spec_hint=spec_hint)
     
     @property
     def preferred_spec(self) -> AudioSpec:
         return self._get_spec()
     
-class LogicalAudioDevice(_AudioDevice):
+class LogicalAudioDevice(_AudioDevice): # tests needed
     _device_id: SDL_AudioDeviceID
     
     def __repr__(self):
@@ -282,7 +297,7 @@ class LogicalAudioDevice(_AudioDevice):
         if not success:
             raise SDLError()
 
-class Audio:
+class Audio: # tests needed
     _spec: AudioSpec
     _buffer: ctypes.Array[ctypes.c_char]
 
@@ -367,7 +382,7 @@ class Audio:
     # stretch()
     # mic()
 
-PG_AUDIO_STREAM_PYOBJ = "pg_audio_stream_pyobj".encode("utf8")
+_PG_AUDIO_STREAM_PYOBJ = "pg_audio_stream_pyobj".encode("utf8")
 
 def _get_stream_pyobj(stream) -> "AudioStream":
     prop_id = sdl3.SDL_GetAudioStreamProperties(stream)
@@ -375,7 +390,7 @@ def _get_stream_pyobj(stream) -> "AudioStream":
         raise SDLError()
     stream_obj_p = sdl3.SDL_GetPointerProperty(
         prop_id, # type: ignore
-        PG_AUDIO_STREAM_PYOBJ, # type: ignore
+        _PG_AUDIO_STREAM_PYOBJ, # type: ignore
         NULL # type: ignore
     )
     if not stream_obj_p:
@@ -392,7 +407,7 @@ def _audio_stream_put_callback(userdata, stream, additional_amount, total_amount
     if sdl3.SDL_GetSemaphoreValue(stream_obj._semaphore_get_audio)==0:
         sdl3.SDL_SignalSemaphore(stream_obj._semaphore_get_audio)
 
-class AudioStream:
+class AudioStream: # tests needed
     if typing.TYPE_CHECKING:
         _stream_p: ctypes._Pointer[SDL_AudioStream]
         _semaphore_get_audio: ctypes._Pointer[SDL_Semaphore]
@@ -403,7 +418,7 @@ class AudioStream:
             raise SDLError()
         success = sdl3.SDL_SetPointerProperty(
             prop_id, # type: ignore
-            PG_AUDIO_STREAM_PYOBJ, # type: ignore
+            _PG_AUDIO_STREAM_PYOBJ, # type: ignore
             ctypes.py_object(self) # type: ignore
         )
         if not success:
