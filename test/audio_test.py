@@ -222,6 +222,24 @@ class PhysicalAudioDeviceTest(unittest.TestCase, _AudioDeviceTest):
         self.testing_physical_audio_device = audio.list_playback_devices()[0]
         self.testing_audio_device = self.testing_physical_audio_device
     
+    def test___eq__(self):
+        self.assertNotEqual(
+            self.testing_physical_audio_device,
+            "NOT CORRECT TYPE"
+        )
+
+        another_device_with_same_id = audio.list_playback_devices()[0]
+        self.assertEqual(
+            self.testing_physical_audio_device,
+            another_device_with_same_id
+        )
+
+        another_device_with_different_id = audio.list_recording_devices()[0]
+        self.assertNotEqual(
+            self.testing_physical_audio_device,
+            another_device_with_different_id
+        )
+    
     def test___init__(self):
         self.assertRaises(
             TypeError,
@@ -235,7 +253,7 @@ class PhysicalAudioDeviceTest(unittest.TestCase, _AudioDeviceTest):
         # Should be read-only
         self.assertRaises(
             AttributeError,
-            lambda: setattr(self.testing_audio_device, "preferred_spec", None)
+            lambda: setattr(self.testing_physical_audio_device, "preferred_spec", None)
         )
     
     def test_open(self):
@@ -249,6 +267,106 @@ class PhysicalAudioDeviceTest(unittest.TestCase, _AudioDeviceTest):
                 spec_hint="NOT CORRECT TYPE" # type: ignore
             )
         )
+
+class LogicalAudioDeviceTest(unittest.TestCase, _AudioDeviceTest):
+    """Test cases of audio.LogicalAudio class"""
+    testing_logical_audio_device: audio.LogicalAudioDevice
+
+    def setUp(self):
+        self.testing_logical_audio_device = audio.open_default_playback_device()
+        self.testing_audio_device = self.testing_logical_audio_device
+    
+    def tearDown(self):
+        del self.testing_logical_audio_device
+    
+    def test___init__(self):
+        self.assertRaises(
+            TypeError,
+            lambda: audio.LogicalAudioDevice()
+        )
+    
+    def test_duplicate(self):
+        dup_dev = self.testing_logical_audio_device.duplicate()
+        self.assertIsInstance(dup_dev, audio.LogicalAudioDevice)
+
+        # the id of duplicated device should be different
+        self.assertNotEqual(dup_dev, self.testing_logical_audio_device)
+
+        self.assertRaises(
+            TypeError,
+            lambda: self.testing_logical_audio_device.duplicate(
+                spec_hint="NOT CORRECT TYPE" # type: ignore
+            )
+        )
+    
+    def test_close(self):
+        dev = audio.open_default_playback_device()
+        dev.close()
+        self.assertEqual(dev.id, 0)
+
+    def test_default_property(self):
+        dev = audio.open_default_playback_device()
+        self.assertIsInstance(dev.default, bool)
+        self.assertEqual(dev.default, True)
+
+        dev = audio.open_default_recording_device()
+        self.assertIsInstance(dev.default, bool)
+        self.assertEqual(dev.default, True)
+
+        dev = audio.list_playback_devices()[0].open()
+        self.assertIsInstance(dev.default, bool)
+        self.assertEqual(dev.default, False)
+
+        dev = audio.list_recording_devices()[0].open()
+        self.assertIsInstance(dev.default, bool)
+        self.assertEqual(dev.default, False)
+
+        # Should be read-only
+        self.assertRaises(
+            AttributeError,
+            lambda: setattr(dev, "default", True)
+        )
+    
+    def test_spec_property(self):
+        spec = self.testing_logical_audio_device.spec
+        self.assertIsInstance(spec, audio.AudioSpec)
+
+        # Should be read-only
+        self.assertRaises(
+            AttributeError,
+            lambda: setattr(self.testing_logical_audio_device, "spec", None)
+        )
+    
+    def test_paused_property(self):
+        paused = self.testing_logical_audio_device.paused
+        self.assertIsInstance(paused, bool)
+
+        self.testing_logical_audio_device.paused = True
+        self.assertEqual(self.testing_logical_audio_device.paused, True)
+        self.testing_logical_audio_device.paused = False
+        self.assertEqual(self.testing_logical_audio_device.paused, False)
+    
+    def test_gain_property(self):
+        gain = self.testing_logical_audio_device.gain
+        self.assertIsInstance(gain, float)
+
+        self.testing_logical_audio_device.gain = 10.0
+        self.assertAlmostEqual(self.testing_logical_audio_device.gain, 10.0)
+        self.testing_logical_audio_device.gain = 0.1
+        self.assertAlmostEqual(self.testing_logical_audio_device.gain, 0.1)
+        self.testing_logical_audio_device.gain = 1.0
+        self.assertAlmostEqual(self.testing_logical_audio_device.gain, 1.0)
+
+        # shall allow an int
+        self.testing_logical_audio_device.gain = 1
+
+        # shall not allow other types
+        self.assertRaises(
+            TypeError,
+            lambda: setattr(self.testing_logical_audio_device, "gain", "STRRR")
+        )
+    
+    
         
 
 if __name__ == '__main__':

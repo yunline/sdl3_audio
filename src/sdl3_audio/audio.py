@@ -26,6 +26,11 @@ class SDLError(RuntimeError):
         super().__init__(err.decode("utf8"),*args)
 
 def _init_library(sdl_dll_path:str):
+    import os
+    os.environ["SDL_NO_SIGNAL_HANDLERS"] = "1"
+    # Prevent SDL from installing the signal handlers
+    # to keep the functionality of Ctrl+C
+
     global sdl3
     sdl3 = typed_sdl3.load_sdl3_dll(sdl_dll_path)
 
@@ -33,6 +38,10 @@ def _init_library(sdl_dll_path:str):
         result = sdl3.SDL_Init(SDL_INIT_AUDIO)
         if result==False:
             raise SDLError()
+    
+    import atexit
+    atexit.register(sdl3.SDL_Quit) # quit SDL at exit
+
 
 def list_audio_drivers():
     n = sdl3.SDL_GetNumAudioDrivers()
@@ -170,7 +179,9 @@ def open_default_playback_device(spec_hint:AudioSpec|None=None) -> "LogicalAudio
     dev_id = sdl3.SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, spec_p)
     if dev_id==0:
         raise SDLError()
-    return _new_audio_device(LogicalAudioDevice, dev_id)
+    dev = _new_audio_device(LogicalAudioDevice, dev_id)
+    dev._default = True
+    return dev
 
 def open_default_recording_device(spec_hint:AudioSpec|None=None) -> "LogicalAudioDevice":
     if spec_hint is None:
@@ -182,7 +193,9 @@ def open_default_recording_device(spec_hint:AudioSpec|None=None) -> "LogicalAudi
     dev_id = sdl3.SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_RECORDING, spec_p)
     if dev_id==0:
         raise SDLError()
-    return _new_audio_device(LogicalAudioDevice, dev_id)
+    dev = _new_audio_device(LogicalAudioDevice, dev_id)
+    dev._default = True
+    return dev
 
 def _new_audio_device(cls, device_id):
     instance = object.__new__(cls)
@@ -215,6 +228,8 @@ class _AudioDevice:
         return self._device_id.value
     
     def _open(self, spec_hint:AudioSpec|None=None) -> "LogicalAudioDevice":
+        if not isinstance(spec_hint, (type(None), AudioSpec)):
+            raise TypeError(f"'spec_hint' should be a AudioSpec or None, not '{spec_hint.__class__.__name__}'")
         if spec_hint is None:
             spec_p = ctypes.POINTER(SDL_AudioSpec)() # NULL
         else:
@@ -234,26 +249,32 @@ class _AudioDevice:
             raise SDLError()
         return AudioSpec._from_sdl_struct(spec_struct)
 
+    def __eq__(self, v):
+        if not isinstance(v, _AudioDevice):
+            return False
+        return v._device_id.value==self._device_id.value
+
 class PhysicalAudioDevice(_AudioDevice):
     def __repr__(self):
         return f"<PhysicalAudioDevice('{self.name}', id={self._device_id.value})>"
     
     def open(self, spec_hint=None) -> "LogicalAudioDevice":
-        if not isinstance(spec_hint, (type(None), AudioSpec)):
-            raise TypeError(f"'spec_hint' should be a AudioSpec or None, not '{spec_hint.__class__.__name__}'")
         return self._open(spec_hint=spec_hint)
     
     @property
     def preferred_spec(self) -> AudioSpec:
         return self._get_spec()
     
-class LogicalAudioDevice(_AudioDevice): # tests needed
+class LogicalAudioDevice(_AudioDevice):
     _device_id: SDL_AudioDeviceID
+    _default: bool = False
     
-    def __repr__(self):
+    def __repr__(self): # tests needed
         if self._device_id.value == 0:
             return "<LogicalAudioDevice(Closed Device)>"
-        return f"<LogicalAudioDevice('{self.name}', id={self._device_id.value})>"
+        playback_str = "Playback" if self.playback else "Recording"
+        default_str = "Default " if self._default else ""
+        return f"<LogicalAudioDevice({default_str}{playback_str}, name='{self.name}', id={self._device_id.value})>"
     
     def __del__(self):
         self.close()
@@ -262,8 +283,16 @@ class LogicalAudioDevice(_AudioDevice): # tests needed
         return self._open(spec_hint=spec_hint)
 
     def close(self):
+        if not hasattr(self,"_device_id"):
+            # If the device id is not even created
+            # then we don't need to close it
+            return
         sdl3.SDL_CloseAudioDevice(self._device_id)
         self._device_id.value = 0
+
+    @property
+    def default(self):
+        return self._default
 
     @property
     def spec(self) -> AudioSpec:
@@ -592,10 +621,11 @@ class AudioStream: # tests needed
             raise ValueError("'timeout' should be -1, 0 or a positive number")
         if not success:
             raise TimeoutError("'get_audio' timeouot")
-        size = self.available_data_length()
-        return self.get_audio_nowait(size)
+        return self.get_audio_nowait()
     
-    def get_audio_nowait(self, length:int) -> Audio:
+    def get_audio_nowait(self, length:int|None=None) -> Audio:
+        if length is None:
+            length = self.available_data_length()
         buffer = ctypes.create_string_buffer(length)
         real_size = sdl3.SDL_GetAudioStreamData(
             self._stream_p,
