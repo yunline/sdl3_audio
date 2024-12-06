@@ -52,6 +52,9 @@ class AudioTest(unittest.TestCase):
                 spec_hint = "NOT A CORRECT TYPE" # type: ignore
             )
         )
+
+        # Should not raise any error
+        audio.open_default_playback_device(spec_hint=audio.AudioSpec("F32LE"))
     
     def test_open_default_recording_device(self):
         dev = audio.open_default_recording_device()
@@ -65,6 +68,9 @@ class AudioTest(unittest.TestCase):
                 spec_hint = "NOT A CORRECT TYPE" # type: ignore
             )
         )
+
+        # Should not raise any error
+        audio.open_default_recording_device(spec_hint=audio.AudioSpec("F32LE"))
 
 class AudioSpecTest(unittest.TestCase):
     """Test cases of audio.AudioSpec class"""
@@ -268,6 +274,9 @@ class PhysicalAudioDeviceTest(unittest.TestCase, _AudioDeviceTest):
             )
         )
 
+        # Should not raise any error
+        self.testing_physical_audio_device.open(audio.AudioSpec("F32LE"))
+
 class LogicalAudioDeviceTest(unittest.TestCase, _AudioDeviceTest):
     """Test cases of audio.LogicalAudio class"""
     testing_logical_audio_device: audio.LogicalAudioDevice
@@ -298,11 +307,6 @@ class LogicalAudioDeviceTest(unittest.TestCase, _AudioDeviceTest):
                 spec_hint="NOT CORRECT TYPE" # type: ignore
             )
         )
-    
-    def test_close(self):
-        dev = audio.open_default_playback_device()
-        dev.close()
-        self.assertEqual(dev.id, 0)
 
     def test_default_property(self):
         dev = audio.open_default_playback_device()

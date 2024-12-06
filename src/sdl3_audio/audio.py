@@ -68,15 +68,15 @@ _str2fmt = {
 "F32LE":SDL_AUDIO_F32LE.value,
 "F32BE":SDL_AUDIO_F32BE.value,
 }
-_str2width = {
-"U8":1,
-"S8":1,
-"S16LE":2,
-"S16BE":2,
-"S32LE":4,
-"S32BE":4,
-"F32LE":4,
-"F32BE":4,
+_fmt2width = {
+SDL_AUDIO_U8.value:1,
+SDL_AUDIO_S8.value:1,
+SDL_AUDIO_S16LE.value:2,
+SDL_AUDIO_S16BE.value:2,
+SDL_AUDIO_S32LE.value:4,
+SDL_AUDIO_S32BE.value:4,
+SDL_AUDIO_F32LE.value:4,
+SDL_AUDIO_F32BE.value:4,
 }
 _fmt2str = {
 SDL_AUDIO_U8.value:"U8",
@@ -90,9 +90,7 @@ SDL_AUDIO_F32BE.value:"F32BE",
 }
 
 class AudioSpec:
-    _format:str
-    _n_channels:int
-    _sample_rate:int
+    _spec:SDL_AudioSpec
 
     def __init__(self, format, n_channels=2, sample_rate=48000):
         if not isinstance(format, str):
@@ -104,48 +102,46 @@ class AudioSpec:
         if format not in _str2fmt:
             raise ValueError(f"'{format}' is not a valid format, expected {list(_str2fmt.keys())}")
 
-        self._format = format
-        self._n_channels = n_channels
-        self._sample_rate = sample_rate
+        self._spec = SDL_AudioSpec()
+        self._spec.format = _str2fmt[format]
+        self._spec.channels = n_channels
+        self._spec.freq = sample_rate
     
     def __repr__(self):
-        return f"<AudioSpec(format='{self._format}', n_channels={self._n_channels}, sample_rate={self._sample_rate})>"
+        return f"<AudioSpec(format='{self.format}', n_channels={self.n_channels}, sample_rate={self.sample_rate})>"
     
     @property
     def format(self):
-        return self._format
+        return _fmt2str[self._spec.format]
     
     @property
     def n_channels(self):
-        return self._n_channels
+        return self._spec.channels
     
     @property
     def sample_rate(self):
-        return self._sample_rate
+        return self._spec.freq
     
     @property
     def frame_size(self):
-        return self._n_channels*_str2width[self._format]
-    
-    def _as_sdl_struct(self) -> SDL_AudioSpec:
-        spec = SDL_AudioSpec()
-        spec.format = _str2fmt[self._format]
-        spec.channels = self._n_channels
-        spec.freq = self._sample_rate
-        return spec
+        return self._spec.channels*_fmt2width[self._spec.format]
     
     @classmethod
-    def _from_sdl_struct(cls, struct:SDL_AudioSpec):
-        format_str = _fmt2str[struct.format]
-        return cls(format_str, struct.channels, struct.freq)
+    def _from_struct(cls, struct:SDL_AudioSpec):
+        instance = cls.__new__(cls)
+        instance._spec = SDL_AudioSpec()
+        instance._spec.format = struct.format
+        instance._spec.channels = struct.channels
+        instance._spec.freq = struct.freq
+        return instance
     
     def __eq__(self, value: object) -> bool:
-        if not isinstance(value,AudioSpec):
+        if not isinstance(value, AudioSpec):
             return False
         return (
-            value._format==self._format and 
-            value._n_channels==self._n_channels and
-            value.sample_rate==self.sample_rate
+            value._spec.format==self._spec.format and 
+            value._spec.channels==self._spec.channels and
+            value._spec.freq==self._spec.freq
         )
 
 def _list_devices(is_playback:bool):
@@ -173,7 +169,7 @@ def open_default_playback_device(spec_hint:AudioSpec|None=None) -> "LogicalAudio
     if spec_hint is None:
         spec_p = ctypes.POINTER(SDL_AudioSpec)() # NULL
     elif isinstance(spec_hint, AudioSpec):
-        spec_p = byref(spec_hint._as_sdl_struct())
+        spec_p = byref(spec_hint._spec)
     else:
         raise TypeError(f"'spec_hint' should be a AudioSpec or None, not '{spec_hint.__class__.__name__}'")
     dev_id = sdl3.SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, spec_p)
@@ -187,7 +183,7 @@ def open_default_recording_device(spec_hint:AudioSpec|None=None) -> "LogicalAudi
     if spec_hint is None:
         spec_p = ctypes.POINTER(SDL_AudioSpec)() # NULL
     elif isinstance(spec_hint, AudioSpec):
-        spec_p = byref(spec_hint._as_sdl_struct())
+        spec_p = byref(spec_hint._spec)
     else:
         raise TypeError(f"'spec_hint' should be a AudioSpec or None, not '{spec_hint.__class__.__name__}'")
     dev_id = sdl3.SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_RECORDING, spec_p)
@@ -233,7 +229,7 @@ class _AudioDevice:
         if spec_hint is None:
             spec_p = ctypes.POINTER(SDL_AudioSpec)() # NULL
         else:
-            spec = spec_hint._as_sdl_struct()
+            spec = spec_hint._spec
             spec_p = byref(spec)
         dev_id = sdl3.SDL_OpenAudioDevice(self._device_id, spec_p)
         if dev_id==0:
@@ -247,7 +243,7 @@ class _AudioDevice:
         success = sdl3.SDL_GetAudioDeviceFormat(self._device_id, byref(spec_struct), NULL)
         if not success:
             raise SDLError()
-        return AudioSpec._from_sdl_struct(spec_struct)
+        return AudioSpec._from_struct(spec_struct)
 
     def __eq__(self, v):
         if not isinstance(v, _AudioDevice):
@@ -266,7 +262,8 @@ class PhysicalAudioDevice(_AudioDevice):
         return self._get_spec()
     
 class LogicalAudioDevice(_AudioDevice):
-    _device_id: SDL_AudioDeviceID
+    # initiallize the device id to 0 (invalid)
+    _device_id: SDL_AudioDeviceID = SDL_AudioDeviceID(0)
     _default: bool = False
     
     def __repr__(self): # tests needed
@@ -277,18 +274,12 @@ class LogicalAudioDevice(_AudioDevice):
         return f"<LogicalAudioDevice({default_str}{playback_str}, name='{self.name}', id={self._device_id.value})>"
     
     def __del__(self):
-        self.close()
+        if self._device_id.value==0:
+            return
+        sdl3.SDL_CloseAudioDevice(self._device_id)
 
     def duplicate(self, spec_hint=None) -> "LogicalAudioDevice":
         return self._open(spec_hint=spec_hint)
-
-    def close(self):
-        if not hasattr(self,"_device_id"):
-            # If the device id is not even created
-            # then we don't need to close it
-            return
-        sdl3.SDL_CloseAudioDevice(self._device_id)
-        self._device_id.value = 0
 
     @property
     def default(self):
@@ -358,7 +349,7 @@ class Audio: # tests needed
         sdl3.SDL_free(buffer)
 
         instance = cls.__new__(cls)
-        instance._spec = AudioSpec._from_sdl_struct(spec)
+        instance._spec = AudioSpec._from_struct(spec)
         instance._buffer = ctypes.create_string_buffer(copied_buf, length.value)
         return instance
 
@@ -382,8 +373,8 @@ class Audio: # tests needed
         return len(self._buffer)/self._spec.frame_size/self._spec.sample_rate
 
     def convert(self, spec:AudioSpec):
-        src_spec = self._spec._as_sdl_struct()
-        dst_spec = spec._as_sdl_struct()
+        src_spec = self._spec._spec
+        dst_spec = spec._spec
         dst_buf = ctypes.POINTER(ctypes.c_uint8)()
         dst_len = ctypes.c_int()
         success = sdl3.SDL_ConvertAudioSamples(
@@ -473,8 +464,8 @@ class AudioStream: # tests needed
         if binding_device is None:
             if src_spec is None or dst_spec is None:
                 raise TypeError("'src_spec' and 'dst_spec' should be set when 'binding_device' is None")
-            src_spec_struct = src_spec._as_sdl_struct()
-            dst_spec_struct = dst_spec._as_sdl_struct()
+            src_spec_struct = src_spec._spec
+            dst_spec_struct = dst_spec._spec
         else:
             device_spec_struct = SDL_AudioSpec()
             success = sdl3.SDL_GetAudioDeviceFormat(
@@ -489,13 +480,13 @@ class AudioStream: # tests needed
                 if src_spec is None:
                     src_spec_struct = device_spec_struct
                 else:
-                    src_spec_struct = src_spec._as_sdl_struct()
+                    src_spec_struct = src_spec._spec
             else: # recording
                 src_spec_struct = device_spec_struct
                 if dst_spec is None:
                     dst_spec_struct = device_spec_struct
                 else:
-                    dst_spec_struct = dst_spec._as_sdl_struct()
+                    dst_spec_struct = dst_spec._spec
                 
         stream_p = sdl3.SDL_CreateAudioStream(
             byref(src_spec_struct),
@@ -539,11 +530,11 @@ class AudioStream: # tests needed
         )
         if not success:
             raise SDLError()
-        return AudioSpec._from_sdl_struct(spec_struct)
+        return AudioSpec._from_struct(spec_struct)
     
     @src_spec.setter
     def src_spec(self, new_spec:AudioSpec):
-        spec_struct = new_spec._as_sdl_struct()
+        spec_struct = new_spec._spec
         success = sdl3.SDL_SetAudioStreamFormat(
             self._stream_p, 
             byref(spec_struct),
@@ -562,11 +553,11 @@ class AudioStream: # tests needed
         )
         if not success:
             raise SDLError()
-        return AudioSpec._from_sdl_struct(spec_struct)
+        return AudioSpec._from_struct(spec_struct)
     
     @dst_spec.setter
     def dst_spec(self, new_spec:AudioSpec):
-        spec_struct = new_spec._as_sdl_struct()
+        spec_struct = new_spec._spec
         success = sdl3.SDL_SetAudioStreamFormat(
             self._stream_p, 
             ctypes.POINTER(SDL_AudioSpec)(), # NULL
